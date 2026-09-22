@@ -3,30 +3,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:voltos/screens/bms_dashboard_screen.dart';
 
 void main() {
-  group('BAT-BMS & Lossigy Replica Screen Tests', () {
+  group('BAT-BMS & Lossigy Live Bluetooth Tests', () {
     testWidgets('Dashboard Tab renders hero SOC, capacity Ah, cycles, and temperature probes', (
       WidgetTester tester,
     ) async {
       final controller = BmsController(
-        initialData: const BatteryData(
-          device: BmsDevice(
-            id: 'A4:C1:38:7B:A1:04',
-            name: 'BAT-BMS-001',
-            model: '16S LiFePO4 • 48V 100Ah',
-            rssi: -58,
-            voltage: 51.84,
-            socPercent: 78.0,
-          ),
-          socPercent: 78.0,
-          voltage: 51.84,
-          current: -12.4,
-          nominalCapacityAh: 100.0,
-          remainingCapacityAh: 78.0,
-          cycleCount: 142,
-          chargingEnabled: true,
-          dischargingEnabled: true,
-          isConnected: true,
-        ),
+        initialData: BatteryData.demoPreset,
       );
 
       await tester.pumpWidget(
@@ -60,7 +42,9 @@ void main() {
     testWidgets('Cells Tab displays 16S voltage map, max cell, min cell, and delta V', (
       WidgetTester tester,
     ) async {
-      final controller = BmsController();
+      final controller = BmsController(
+        initialData: BatteryData.demoPreset,
+      );
 
       await tester.pumpWidget(
         MaterialApp(home: BmsDashboardScreen(controller: controller)),
@@ -82,7 +66,9 @@ void main() {
     testWidgets('Controls Tab displays MOSFET switches and Hardware Protection Alarms', (
       WidgetTester tester,
     ) async {
-      final controller = BmsController();
+      final controller = BmsController(
+        initialData: BatteryData.demoPreset,
+      );
 
       await tester.pumpWidget(
         MaterialApp(home: BmsDashboardScreen(controller: controller)),
@@ -100,10 +86,12 @@ void main() {
       expect(find.text('NORMAL'), findsWidgets);
     });
 
-    testWidgets('Devices Tab allows scanning and selecting nearby BMS packs', (
+    testWidgets('Devices Tab shows empty state when no BLE devices nearby', (
       WidgetTester tester,
     ) async {
-      final controller = BmsController();
+      final controller = BmsController(
+        initialData: BatteryData.emptyDisconnected,
+      );
 
       await tester.pumpWidget(
         MaterialApp(home: BmsDashboardScreen(controller: controller)),
@@ -113,23 +101,25 @@ void main() {
       await tester.tap(find.text('Devices'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Bluetooth LE Scanner'), findsOneWidget);
-      expect(find.widgetWithText(ListTile, 'BAT-BMS-001'), findsOneWidget);
-      expect(find.widgetWithText(ListTile, 'Lossigy-48V-Aux'), findsOneWidget);
+      expect(find.text('Bluetooth LE Hardware Scanner'), findsOneWidget);
+      expect(find.text('No Bluetooth Devices Detected'), findsOneWidget);
+      expect(find.text('Load Demo Battery (Test UI)'), findsOneWidget);
 
-      // Connect to Lossigy-48V-Aux
-      await tester.tap(find.widgetWithText(FilledButton, 'Connect').first);
+      // Tap Load Demo Battery
+      await tester.tap(find.text('Load Demo Battery (Test UI)'));
       await tester.pumpAndSettle();
 
-      // Controller active device updated
-      expect(controller.data.device?.name, 'Lossigy-48V-Aux');
-      expect(controller.data.socPercent, 91.0);
+      // Demo device is loaded
+      expect(controller.data.device?.name, 'BAT-BMS-001');
+      expect(find.text('BAT-BMS-001'), findsWidgets);
     });
 
     testWidgets('Tapping Charge/Discharge opens safety confirmation dialog specifying target device', (
       WidgetTester tester,
     ) async {
-      final controller = BmsController();
+      final controller = BmsController(
+        initialData: BatteryData.demoPreset,
+      );
 
       await tester.pumpWidget(
         MaterialApp(home: BmsDashboardScreen(controller: controller)),
