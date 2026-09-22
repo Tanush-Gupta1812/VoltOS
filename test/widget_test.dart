@@ -148,5 +148,87 @@ void main() {
 
       expect(controller.data.chargingEnabled, isFalse);
     });
+
+    testWidgets('PIN Recovery Tab renders target selector, config, and start button', (
+      WidgetTester tester,
+    ) async {
+      final controller = BmsController(
+        initialData: BatteryData.demoPreset,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(home: BmsDashboardScreen(controller: controller)),
+      );
+
+      // Switch to PIN Tool tab
+      await tester.tap(find.text('PIN Tool'));
+      await tester.pumpAndSettle();
+
+      // Verify header
+      expect(find.text('BLE PIN Recovery'), findsOneWidget);
+      expect(find.text('Recover forgotten PINs on your own devices'), findsOneWidget);
+
+      // Verify target device section
+      expect(find.text('TARGET DEVICE'), findsOneWidget);
+
+      // Verify PIN config section
+      expect(find.text('PIN LENGTH'), findsOneWidget);
+      expect(find.text('4 Digit'), findsOneWidget);
+      expect(find.text('6 Digit'), findsOneWidget);
+      expect(find.text('STRATEGY'), findsOneWidget);
+      expect(find.text('Smart'), findsOneWidget);
+      expect(find.text('Full'), findsOneWidget);
+
+      // Verify Start button (disabled without target)
+      expect(find.text('Start Recovery'), findsOneWidget);
+    });
+
+    testWidgets('PIN Recovery shows ownership confirmation before starting', (
+      WidgetTester tester,
+    ) async {
+      final controller = BmsController(
+        initialData: BatteryData.demoPreset,
+      );
+      // Load demo preset to populate availableDevices list
+      controller.loadDemoPreset();
+
+      await tester.pumpWidget(
+        MaterialApp(home: BmsDashboardScreen(controller: controller)),
+      );
+
+      // Switch to PIN Tool tab
+      await tester.tap(find.text('PIN Tool'));
+      await tester.pumpAndSettle();
+
+      // Select the demo device as target via ChoiceChip
+      final chipFinder = find.ancestor(
+        of: find.text('BAT-BMS-001'),
+        matching: find.byType(ChoiceChip),
+      );
+      expect(chipFinder, findsOneWidget);
+      await tester.tap(chipFinder);
+      await tester.pumpAndSettle();
+
+      // Tap Start Recovery
+      await tester.tap(find.text('Start Recovery'));
+      await tester.pumpAndSettle();
+
+      // Ownership confirmation dialog should appear
+      expect(find.text('Confirm Device Ownership'), findsOneWidget);
+      expect(
+        find.text('Using this tool on devices you do not own is illegal and unethical.'),
+        findsOneWidget,
+      );
+      expect(find.text('I Own This Device'), findsOneWidget);
+      expect(find.text('Cancel'), findsWidgets);
+
+      // Cancel the dialog
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      // Dialog dismissed
+      expect(find.text('Confirm Device Ownership'), findsNothing);
+    });
+
   });
 }

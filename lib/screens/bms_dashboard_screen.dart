@@ -388,6 +388,301 @@ class BmsController extends ChangeNotifier {
 }
 
 // ============================================================================
+// PIN RECOVERY ENGINE
+// ============================================================================
+
+enum PinStrategy { commonFirst, sequential }
+
+enum RecoveryState { idle, running, paused, cooldown, success }
+
+class PinRecoveryController extends ChangeNotifier {
+  BmsDevice? _targetDevice;
+  RecoveryState _state = RecoveryState.idle;
+  String _currentPin = '';
+  int _attemptCount = 0;
+  int _pinLength = 4;
+  PinStrategy _strategy = PinStrategy.commonFirst;
+  String? _recoveredPin;
+  final List<String> _attemptLog = [];
+  DateTime? _startTime;
+  double _pinsPerSecond = 0;
+  bool _ownershipConfirmed = false;
+  int _commonPinIndex = 0;
+  int _sequentialCounter = 0;
+  bool _commonPhaseComplete = false;
+  final Set<String> _triedPins = {};
+
+  // ── 50 most common BLE / Bluetooth 4-digit PINs ──
+  static const List<String> commonPins4 = [
+    '0000', '1234', '1111', '0001', '1010', '2222', '1212',
+    '4321', '2000', '6969', '1122', '1313', '8888', '4444',
+    '0852', '2580', '1221', '0987', '6543', '7777', '0123',
+    '3333', '5555', '6666', '9876', '1357', '2468', '1004',
+    '2001', '1999', '2020', '2024', '2025', '5678', '4567',
+    '3456', '2345', '1100', '0011', '9998', '8899', '7654',
+    '5050', '1818', '2727', '3636', '4545', '6363', '7272',
+  ];
+
+  static const List<String> commonPins6 = [
+    '000000', '123456', '111111', '000001', '654321', '999999',
+    '112233', '121212', '123123', '696969', '159753', '222222',
+    '888888', '333333', '555555', '777777', '246810', '135790',
+    '100000', '200000', '010101', '101010', '999998', '102030',
+    '123321', '111222', '000123', '987654', '445566', '778899',
+  ];
+
+  // ── Getters ──
+  BmsDevice? get targetDevice => _targetDevice;
+  RecoveryState get state => _state;
+  String get currentPin => _currentPin;
+  int get attemptCount => _attemptCount;
+  int get pinLength => _pinLength;
+  PinStrategy get strategy => _strategy;
+  String? get recoveredPin => _recoveredPin;
+  List<String> get attemptLog => List.unmodifiable(_attemptLog);
+  double get pinsPerSecond => _pinsPerSecond;
+  bool get ownershipConfirmed => _ownershipConfirmed;
+  bool get isRunning => _state == RecoveryState.running;
+  bool get isPaused => _state == RecoveryState.paused;
+  bool get isIdle => _state == RecoveryState.idle;
+  bool get isSuccess => _state == RecoveryState.success;
+
+  int get totalPins => _pinLength == 4 ? 10000 : 1000000;
+  int get remainingPins => totalPins - _attemptCount;
+  double get progress =>
+      totalPins > 0 ? (_attemptCount / totalPins).clamp(0.0, 1.0) : 0.0;
+
+  String get estimatedTimeRemaining {
+    if (_pinsPerSecond <= 0 || remainingPins <= 0) return '--';
+    final s = remainingPins / _pinsPerSecond;
+    if (s < 60) return '${s.toInt()}s';
+    if (s < 3600) return '${(s / 60).toInt()}m ${(s % 60).toInt()}s';
+    return '${(s / 3600).toInt()}h ${((s % 3600) / 60).toInt()}m';
+  }
+
+  List<String> get _commonPins =>
+      _pinLength == 4 ? commonPins4 : commonPins6;
+
+  String _padPin(int v) => v.toString().padLeft(_pinLength, '0');
+
+  // ── Setters ──
+  void setTargetDevice(BmsDevice? d) {
+    _targetDevice = d;
+    notifyListeners();
+  }
+
+  void setOwnershipConfirmed(bool v) {
+    _ownershipConfirmed = v;
+    notifyListeners();
+  }
+
+  void setPinLength(int l) {
+    if (l == 4 || l == 6) {
+      _pinLength = l;
+      notifyListeners();
+    }
+  }
+
+  void setStrategy(PinStrategy s) {
+    _strategy = s;
+    notifyListeners();
+  }
+
+  // ── Control ──
+  Future<void> startRecovery() async {
+    if (_targetDevice == null || !_ownershipConfirmed) return;
+    _state = RecoveryState.running;
+    _attemptCount = 0;
+    _commonPinIndex = 0;
+    _sequentialCounter = 0;
+    _commonPhaseComplete = false;
+    _recoveredPin = null;
+    _attemptLog.clear();
+    _triedPins.clear();
+    _startTime = DateTime.now();
+    _pinsPerSecond = 0;
+    _addLog('▶ Recovery started — ${_strategy == PinStrategy.commonFirst ? "Common PINs first" : "Sequential"} • $_pinLength-digit');
+    notifyListeners();
+    await _runRecoveryLoop();
+  }
+
+  void pauseRecovery() {
+    if (_state == RecoveryState.running) {
+      _state = RecoveryState.paused;
+      _addLog('⏸ Paused at attempt #$_attemptCount');
+      notifyListeners();
+    }
+  }
+
+  void resumeRecovery() {
+    if (_state == RecoveryState.paused) {
+      _state = RecoveryState.running;
+      _addLog('▶ Resumed');
+      notifyListeners();
+      _runRecoveryLoop();
+    }
+  }
+
+  void resetRecovery() {
+    _state = RecoveryState.idle;
+    _currentPin = '';
+    _attemptCount = 0;
+    _commonPinIndex = 0;
+    _sequentialCounter = 0;
+    _commonPhaseComplete = false;
+    _recoveredPin = null;
+    _attemptLog.clear();
+    _triedPins.clear();
+    _pinsPerSecond = 0;
+    _startTime = null;
+    notifyListeners();
+  }
+
+  // ── PIN Generator ──
+  String? _nextPin() {
+    // Phase 1: common PINs
+    if (_strategy == PinStrategy.commonFirst && !_commonPhaseComplete) {
+      if (_commonPinIndex < _commonPins.length) {
+        final pin = _commonPins[_commonPinIndex++];
+        _triedPins.add(pin);
+        return pin;
+      }
+      _commonPhaseComplete = true;
+      _sequentialCounter = 0;
+      _addLog('── Common PINs exhausted, switching to sequential ──');
+    }
+    // Phase 2: sequential sweep
+    while (_sequentialCounter < totalPins) {
+      final pin = _padPin(_sequentialCounter++);
+      if (_triedPins.contains(pin)) continue;
+      _triedPins.add(pin);
+      return pin;
+    }
+    return null; // all exhausted
+  }
+
+  // ── Recovery Loop (fast, batched UI updates) ──
+  Future<void> _runRecoveryLoop() async {
+    // Attempt BLE connection if real device
+    final raw = _targetDevice?.rawDevice;
+    if (raw != null) {
+      try {
+        _addLog('Connecting to ${_targetDevice!.name}...');
+        notifyListeners();
+        await raw.connect(timeout: const Duration(seconds: 8), license: License.nonprofit);
+        await raw.discoverServices();
+        _addLog('Connected — ${raw.servicesList.length} services found');
+      } catch (e) {
+        debugPrint('PIN Recovery connect: $e');
+        _addLog('⚠ Connection: $e');
+      }
+    }
+
+    int batch = 0;
+    while (_state == RecoveryState.running) {
+      final pin = _nextPin();
+      if (pin == null) {
+        _state = RecoveryState.idle;
+        _addLog('✖ ALL $totalPins PINs EXHAUSTED — No match');
+        notifyListeners();
+        return;
+      }
+
+      _currentPin = pin;
+      _attemptCount++;
+      batch++;
+
+      final success = await _attemptPin(pin);
+
+      // Speed calculation
+      if (_startTime != null) {
+        final ms = DateTime.now().difference(_startTime!).inMilliseconds;
+        if (ms > 0) _pinsPerSecond = (_attemptCount / ms) * 1000;
+      }
+
+      if (success) {
+        _recoveredPin = pin;
+        _state = RecoveryState.success;
+        _addLog('🔓 PIN RECOVERED: $pin');
+        notifyListeners();
+        return;
+      }
+
+      // Batch UI updates for speed (every 30 attempts or 150ms)
+      if (batch >= 30) {
+        batch = 0;
+        notifyListeners();
+        await Future.delayed(const Duration(milliseconds: 2));
+      }
+    }
+    notifyListeners();
+  }
+
+  // ── BLE PIN Attempt ──
+  Future<bool> _attemptPin(String pin) async {
+    final raw = _targetDevice?.rawDevice;
+
+    if (raw == null) {
+      // Simulation mode — fast cycle for UI testing
+      await Future.delayed(const Duration(microseconds: 50));
+      if (_attemptCount % 200 == 0) _addLog('⬚ $pin — simulated');
+      return false;
+    }
+
+    // Try writing PIN to every writable GATT characteristic
+    try {
+      final pinBytes = pin.codeUnits;
+      for (final svc in raw.servicesList) {
+        for (final ch in svc.characteristics) {
+          if (!ch.properties.write && !ch.properties.writeWithoutResponse) {
+            continue;
+          }
+          try {
+            await ch.write(
+              pinBytes,
+              withoutResponse: ch.properties.writeWithoutResponse,
+            );
+            // Check for positive response
+            if (ch.properties.read) {
+              try {
+                final resp = await ch.read();
+                final s = String.fromCharCodes(resp).toLowerCase();
+                if (s.contains('ok') ||
+                    s.contains('success') ||
+                    s.contains('granted') ||
+                    s == '1') {
+                  return true;
+                }
+              } catch (_) {}
+            }
+          } catch (_) {
+            // Characteristic rejected write — skip it
+          }
+        }
+      }
+    } catch (e) {
+      if (_attemptCount % 100 == 0) _addLog('⚠ $pin — $e');
+      // Try to reconnect if disconnected
+      try {
+        await raw.connect(timeout: const Duration(seconds: 4), license: License.nonprofit);
+        await raw.discoverServices();
+      } catch (_) {}
+    }
+
+    if (_attemptCount % 100 == 0) _addLog('✗ $pin — no match');
+    return false;
+  }
+
+  void _addLog(String msg) {
+    final ts = DateTime.now().toString().substring(11, 19);
+    _attemptLog.insert(0, '[$ts] $msg');
+    if (_attemptLog.length > 500) {
+      _attemptLog.removeRange(500, _attemptLog.length);
+    }
+  }
+}
+
+// ============================================================================
 // MAIN DASHBOARD SCREEN
 // ============================================================================
 
@@ -402,6 +697,7 @@ class BmsDashboardScreen extends StatefulWidget {
 
 class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
   late final BmsController _controller;
+  late final PinRecoveryController _pinRecoveryController;
   bool _isLocalController = false;
   int _currentTabIndex = 0;
 
@@ -414,10 +710,12 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
       _controller = BmsController();
       _isLocalController = true;
     }
+    _pinRecoveryController = PinRecoveryController();
   }
 
   @override
   void dispose() {
+    _pinRecoveryController.dispose();
     if (_isLocalController) {
       _controller.dispose();
     }
@@ -805,6 +1103,7 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
                       _buildCellsTab(context, data),
                       _buildControlsAndProtectionTab(context, data),
                       _buildDevicesTab(context, data),
+                      _buildPinRecoveryTab(context, data),
                     ],
                   ),
                 ),
@@ -838,6 +1137,11 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
                 icon: Icon(Icons.bluetooth_searching_rounded),
                 selectedIcon: Icon(Icons.bluetooth_searching_rounded),
                 label: 'Devices',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.key_outlined),
+                selectedIcon: Icon(Icons.key_rounded),
+                label: 'PIN Tool',
               ),
             ],
           ),
@@ -1986,6 +2290,728 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
           const SizedBox(height: 20),
         ],
       ),
+    );
+  }
+
+  // ===========================================================================
+  // TAB 5: BLE PIN RECOVERY TOOL
+  // ===========================================================================
+
+  Widget _buildPinRecoveryTab(BuildContext context, BatteryData data) {
+    return ListenableBuilder(
+      listenable: _pinRecoveryController,
+      builder: (context, _) {
+        final rc = _pinRecoveryController;
+        final theme = Theme.of(context);
+        final colorScheme = theme.colorScheme;
+        final devices = _controller.availableDevices;
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Header
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: colorScheme.tertiaryContainer,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.key_rounded, size: 18, color: colorScheme.onTertiaryContainer),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'BLE PIN Recovery',
+                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                        Text(
+                          'Recover forgotten PINs on your own devices',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // ── Success Card ──
+              if (rc.isSuccess && rc.recoveredPin != null) ...[
+                _buildPinSuccessCard(context, rc),
+                const SizedBox(height: 16),
+              ],
+
+              // ── Target Device Selector ──
+              _buildPinTargetSelector(context, rc, devices),
+              const SizedBox(height: 12),
+
+              // ── PIN Configuration ──
+              if (rc.isIdle) ...[
+                _buildPinConfigRow(context, rc),
+                const SizedBox(height: 16),
+              ],
+
+              // ── Live Progress Card ──
+              if (!rc.isIdle) ...[
+                _buildPinProgressCard(context, rc),
+                const SizedBox(height: 14),
+              ],
+
+              // ── Control Buttons ──
+              _buildPinControlButtons(context, rc),
+              const SizedBox(height: 16),
+
+              // ── Attempt Log ──
+              if (rc.attemptLog.isNotEmpty)
+                _buildPinAttemptLog(context, rc),
+
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ── Target device dropdown ──
+  Widget _buildPinTargetSelector(
+    BuildContext context,
+    PinRecoveryController rc,
+    List<BmsDevice> devices,
+  ) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final hasTarget = rc.targetDevice != null;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: hasTarget
+              ? colorScheme.primary.withValues(alpha: 0.4)
+              : colorScheme.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'TARGET DEVICE',
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: colorScheme.onSurfaceVariant,
+              fontSize: 10,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (devices.isEmpty)
+            Row(
+              children: [
+                Icon(Icons.bluetooth_searching_rounded, size: 16, color: colorScheme.outline),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'No devices scanned yet. Go to Devices tab and scan first.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: devices.map((dev) {
+                final isSelected = rc.targetDevice?.id == dev.id;
+                return ChoiceChip(
+                  selected: isSelected,
+                  label: Text(
+                    dev.name,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                    ),
+                  ),
+                  avatar: Icon(
+                    isSelected ? Icons.gps_fixed_rounded : Icons.bluetooth_rounded,
+                    size: 16,
+                  ),
+                  onSelected: rc.isIdle
+                      ? (_) => rc.setTargetDevice(isSelected ? null : dev)
+                      : null,
+                );
+              }).toList(),
+            ),
+          if (hasTarget) ...[
+            const SizedBox(height: 6),
+            Text(
+              'MAC: ${rc.targetDevice!.id} • ${rc.targetDevice!.rssi} dBm',
+              style: theme.textTheme.labelSmall?.copyWith(
+                fontSize: 10,
+                color: colorScheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── PIN length & strategy toggles ──
+  Widget _buildPinConfigRow(BuildContext context, PinRecoveryController rc) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.25),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              // PIN Length
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'PIN LENGTH',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.8,
+                        color: colorScheme.onSurfaceVariant,
+                        fontSize: 10,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    SegmentedButton<int>(
+                      segments: const [
+                        ButtonSegment(value: 4, label: Text('4 Digit')),
+                        ButtonSegment(value: 6, label: Text('6 Digit')),
+                      ],
+                      selected: {rc.pinLength},
+                      onSelectionChanged: (s) => rc.setPinLength(s.first),
+                      style: ButtonStyle(
+                        visualDensity: VisualDensity.compact,
+                        textStyle: WidgetStatePropertyAll(
+                          theme.textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Strategy
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'STRATEGY',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.8,
+                        color: colorScheme.onSurfaceVariant,
+                        fontSize: 10,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    SegmentedButton<PinStrategy>(
+                      segments: const [
+                        ButtonSegment(
+                          value: PinStrategy.commonFirst,
+                          label: Text('Smart'),
+                          icon: Icon(Icons.auto_awesome, size: 14),
+                        ),
+                        ButtonSegment(
+                          value: PinStrategy.sequential,
+                          label: Text('Full'),
+                          icon: Icon(Icons.sort, size: 14),
+                        ),
+                      ],
+                      selected: {rc.strategy},
+                      onSelectionChanged: (s) => rc.setStrategy(s.first),
+                      style: ButtonStyle(
+                        visualDensity: VisualDensity.compact,
+                        textStyle: WidgetStatePropertyAll(
+                          theme.textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: colorScheme.primaryContainer.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline_rounded, size: 14, color: colorScheme.primary),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    rc.strategy == PinStrategy.commonFirst
+                        ? 'Tries ${rc.pinLength == 4 ? 49 : 30} common defaults first, then all ${rc.totalPins} combinations'
+                        : 'Sequential sweep: 0000 → ${rc.pinLength == 4 ? "9999" : "999999"} (${rc.totalPins} total)',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      fontSize: 10,
+                      color: colorScheme.primary,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Progress display with current PIN hero ──
+  Widget _buildPinProgressCard(BuildContext context, PinRecoveryController rc) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isActive = rc.isRunning;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: rc.isSuccess
+            ? Colors.green.withValues(alpha: 0.1)
+            : colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: rc.isSuccess
+              ? Colors.green.withValues(alpha: 0.5)
+              : (isActive
+                  ? colorScheme.primary.withValues(alpha: 0.5)
+                  : colorScheme.outlineVariant.withValues(alpha: 0.5)),
+          width: 1.5,
+        ),
+      ),
+      child: Column(
+        children: [
+          // Current PIN Hero
+          Text(
+            'CURRENT PIN',
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.5,
+              color: colorScheme.onSurfaceVariant,
+              fontSize: 10,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: isActive ? colorScheme.primary : colorScheme.outlineVariant,
+                width: 1.5,
+              ),
+            ),
+            child: Text(
+              rc.currentPin.isEmpty ? '----' : rc.currentPin,
+              style: theme.textTheme.displaySmall?.copyWith(
+                fontWeight: FontWeight.w900,
+                letterSpacing: 10,
+                fontFamily: 'monospace',
+                color: isActive ? colorScheme.primary : colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Progress Bar
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: rc.progress,
+              minHeight: 10,
+              backgroundColor: colorScheme.surfaceContainerHighest,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                rc.isSuccess ? Colors.green : colorScheme.primary,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Stats Row
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildPinStat('TRIED', '${rc.attemptCount}', Icons.tag_rounded),
+              Container(height: 24, width: 1, color: colorScheme.outlineVariant),
+              _buildPinStat('OF', '${rc.totalPins}', Icons.grid_view_rounded),
+              Container(height: 24, width: 1, color: colorScheme.outlineVariant),
+              _buildPinStat('SPEED', '${rc.pinsPerSecond.toStringAsFixed(1)}/s', Icons.speed_rounded),
+              Container(height: 24, width: 1, color: colorScheme.outlineVariant),
+              _buildPinStat('ETA', rc.estimatedTimeRemaining, Icons.timer_outlined),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPinStat(String label, String value, IconData icon) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Column(
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 10, color: colorScheme.onSurfaceVariant),
+            const SizedBox(width: 3),
+            Text(
+              label,
+              style: theme.textTheme.labelSmall?.copyWith(
+                fontSize: 8.5,
+                fontWeight: FontWeight.w600,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: theme.textTheme.labelMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Success celebration card ──
+  Widget _buildPinSuccessCard(BuildContext context, PinRecoveryController rc) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.green.withValues(alpha: 0.15),
+            Colors.teal.withValues(alpha: 0.1),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.green.withValues(alpha: 0.5), width: 2),
+      ),
+      child: Column(
+        children: [
+          const Icon(Icons.lock_open_rounded, size: 48, color: Colors.green),
+          const SizedBox(height: 10),
+          Text(
+            'PIN RECOVERED!',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w900,
+              color: Colors.green.shade700,
+              letterSpacing: 1,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+            decoration: BoxDecoration(
+              color: colorScheme.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.green, width: 2),
+            ),
+            child: Text(
+              rc.recoveredPin ?? '',
+              style: theme.textTheme.headlineLarge?.copyWith(
+                fontWeight: FontWeight.w900,
+                letterSpacing: 12,
+                fontFamily: 'monospace',
+                color: Colors.green.shade700,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Found after ${rc.attemptCount} attempts',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Control buttons ──
+  Widget _buildPinControlButtons(BuildContext context, PinRecoveryController rc) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final canStart = rc.isIdle && rc.targetDevice != null;
+
+    if (rc.isIdle || rc.isSuccess) {
+      return Row(
+        children: [
+          Expanded(
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                backgroundColor: canStart ? colorScheme.primary : null,
+              ),
+              onPressed: canStart
+                  ? () async {
+                      final confirmed = await _showOwnershipConfirmationDialog(context);
+                      if (confirmed == true && mounted) {
+                        _pinRecoveryController.setOwnershipConfirmed(true);
+                        await _pinRecoveryController.startRecovery();
+                      }
+                    }
+                  : null,
+              icon: const Icon(Icons.play_arrow_rounded),
+              label: Text(
+                rc.isSuccess ? 'Run Again' : 'Start Recovery',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+          if (rc.isSuccess) ...[
+            const SizedBox(width: 10),
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(52, 52),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              onPressed: () => rc.resetRecovery(),
+              child: const Icon(Icons.refresh_rounded),
+            ),
+          ],
+        ],
+      );
+    }
+
+    // Running / Paused states
+    return Row(
+      children: [
+        Expanded(
+          child: rc.isRunning
+              ? FilledButton.tonalIcon(
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(52),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  onPressed: () => rc.pauseRecovery(),
+                  icon: const Icon(Icons.pause_rounded),
+                  label: const Text('Pause', style: TextStyle(fontWeight: FontWeight.w700)),
+                )
+              : FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(52),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  onPressed: () => rc.resumeRecovery(),
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  label: const Text('Resume', style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
+        ),
+        const SizedBox(width: 10),
+        OutlinedButton(
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size(52, 52),
+            foregroundColor: colorScheme.error,
+            side: BorderSide(color: colorScheme.error.withValues(alpha: 0.5)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+          onPressed: () => rc.resetRecovery(),
+          child: const Icon(Icons.stop_rounded),
+        ),
+      ],
+    );
+  }
+
+  // ── Scrollable attempt log ──
+  Widget _buildPinAttemptLog(BuildContext context, PinRecoveryController rc) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'ATTEMPT LOG',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
+                  color: colorScheme.onSurfaceVariant,
+                  fontSize: 10,
+                ),
+              ),
+              Text(
+                '${rc.attemptLog.length} entries',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontSize: 10,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 180),
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: rc.attemptLog.length.clamp(0, 100),
+              itemBuilder: (context, index) {
+                final entry = rc.attemptLog[index];
+                final isSuccess = entry.contains('✅') || entry.contains('🔓');
+                final isError = entry.contains('⚠') || entry.contains('✖');
+
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Text(
+                    entry,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      color: isSuccess
+                          ? Colors.green
+                          : (isError ? colorScheme.error : colorScheme.onSurfaceVariant),
+                      fontWeight: isSuccess ? FontWeight.w800 : FontWeight.w400,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Ownership Confirmation Dialog ──
+  Future<bool?> _showOwnershipConfirmationDialog(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+            side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.4), width: 1.5),
+          ),
+          icon: Icon(Icons.verified_user_rounded, color: colorScheme.primary, size: 44),
+          title: Text(
+            'Confirm Device Ownership',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'By proceeding, I confirm that I am the legal owner of the target BLE device and I am performing this PIN recovery solely to regain access to my own hardware.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colorScheme.errorContainer.withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: colorScheme.error.withValues(alpha: 0.35)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning_amber_rounded, color: colorScheme.error, size: 22),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Using this tool on devices you do not own is illegal and unethical.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.error,
+                          fontWeight: FontWeight.w700,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actionsAlignment: MainAxisAlignment.spaceBetween,
+          actionsPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          actions: [
+            TextButton(
+              style: TextButton.styleFrom(
+                minimumSize: const Size(100, 48),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text('Cancel', style: TextStyle(color: colorScheme.onSurfaceVariant)),
+            ),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(160, 48),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              icon: const Icon(Icons.verified_rounded, size: 18),
+              label: const Text('I Own This Device', style: TextStyle(fontWeight: FontWeight.w700)),
+            ),
+          ],
+        );
+      },
     );
   }
 }
