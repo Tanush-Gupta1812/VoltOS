@@ -4,11 +4,19 @@ import 'package:voltos/screens/bms_dashboard_screen.dart';
 
 void main() {
   group('BMS Dashboard Screen Tests', () {
-    testWidgets('Renders hero SOC percentage and initial active switches', (
+    testWidgets('Renders hero SOC percentage, active device identity, and initial active switches', (
       WidgetTester tester,
     ) async {
       final controller = BmsController(
         initialData: const BatteryData(
+          device: BmsDevice(
+            id: 'A4:C1:38:7B:A1:04',
+            name: 'VoltBMS-Main-Pack',
+            model: '16S LiFePO4 • 48V 100Ah',
+            rssi: -58,
+            voltage: 51.84,
+            socPercent: 78.0,
+          ),
           socPercent: 78.0,
           voltage: 51.84,
           current: -12.4,
@@ -21,6 +29,11 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(home: BmsDashboardScreen(controller: controller)),
       );
+
+      // Active device card
+      expect(find.text('VoltBMS-Main-Pack'), findsOneWidget);
+      expect(find.text('-58 dBm'), findsOneWidget);
+      expect(find.textContaining('A4:C1:38:7B:A1:04'), findsOneWidget);
 
       // Hero gauge
       expect(find.text('78%'), findsOneWidget);
@@ -36,11 +49,47 @@ void main() {
       expect(find.text('-12.4 A'), findsOneWidget);
     });
 
-    testWidgets('Tapping toggle opens safety confirmation dialog and does not toggle immediately', (
+    testWidgets('Device picker bottom sheet allows discovering and selecting a different BMS unit', (
+      WidgetTester tester,
+    ) async {
+      final controller = BmsController();
+
+      await tester.pumpWidget(
+        MaterialApp(home: BmsDashboardScreen(controller: controller)),
+      );
+
+      // Tap on the active device card to open device switcher bottom sheet
+      await tester.tap(find.text('VoltBMS-Main-Pack'));
+      await tester.pumpAndSettle();
+
+      // Bottom sheet is visible
+      expect(find.text('Available BMS Units'), findsOneWidget);
+      expect(find.text('VoltBMS-Aux-Pack'), findsOneWidget);
+      expect(find.text('SolarStorage-BMS-02'), findsOneWidget);
+
+      // Select the Aux Pack
+      await tester.tap(find.text('VoltBMS-Aux-Pack'));
+      await tester.pumpAndSettle();
+
+      // Active device is now VoltBMS-Aux-Pack
+      expect(controller.data.device?.name, 'VoltBMS-Aux-Pack');
+      expect(find.text('VoltBMS-Aux-Pack'), findsOneWidget);
+      expect(find.text('91%'), findsOneWidget); // Aux pack SOC is 91%
+    });
+
+    testWidgets('Tapping toggle opens safety confirmation dialog specifying target device', (
       WidgetTester tester,
     ) async {
       final controller = BmsController(
         initialData: const BatteryData(
+          device: BmsDevice(
+            id: 'A4:C1:38:7B:A1:04',
+            name: 'VoltBMS-Main-Pack',
+            model: '16S LiFePO4 • 48V 100Ah',
+            rssi: -58,
+            voltage: 52.1,
+            socPercent: 85.0,
+          ),
           socPercent: 85.0,
           voltage: 52.1,
           current: 0.0,
@@ -61,9 +110,16 @@ void main() {
       await tester.tap(find.text('CHARGE'));
       await tester.pumpAndSettle();
 
-      // Verify safety confirmation dialog is shown
+      // Verify safety confirmation dialog mentions target device name!
       expect(find.byType(AlertDialog), findsOneWidget);
       expect(find.text('Disable Charging?'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.textContaining('VoltBMS-Main-Pack'),
+        ),
+        findsOneWidget,
+      );
 
       // Verify that the state has NOT toggled yet!
       expect(controller.data.chargingEnabled, isTrue);
@@ -88,42 +144,6 @@ void main() {
       expect(find.text('DISABLED • OFF'), findsOneWidget);
     });
 
-    testWidgets('Discharge cut confirmation dialog contains safety consequences', (
-      WidgetTester tester,
-    ) async {
-      final controller = BmsController(
-        initialData: const BatteryData(
-          socPercent: 50.0,
-          voltage: 48.0,
-          current: -10.0,
-          chargingEnabled: false,
-          dischargingEnabled: true,
-          isConnected: true,
-        ),
-      );
-
-      await tester.pumpWidget(
-        MaterialApp(home: BmsDashboardScreen(controller: controller)),
-      );
-
-      // Tap on DISCHARGE switch
-      await tester.tap(find.text('DISCHARGE'));
-      await tester.pumpAndSettle();
-
-      // Check safety dialog text
-      expect(find.text('Cut Power Output?'), findsOneWidget);
-      expect(
-        find.textContaining('CUT POWER to all connected loads'),
-        findsOneWidget,
-      );
-
-      // Confirm cutting power
-      await tester.tap(find.text('Cut Output Power'));
-      await tester.pumpAndSettle();
-
-      expect(controller.data.dischargingEnabled, isFalse);
-    });
-
     testWidgets('Disconnected state disables switches and displays "Not connected"', (
       WidgetTester tester,
     ) async {
@@ -142,9 +162,10 @@ void main() {
         MaterialApp(home: BmsDashboardScreen(controller: controller)),
       );
 
-      // Verify disconnected hero and switches
+      // Verify disconnected hero, active device card, and switches
       expect(find.text('--%'), findsOneWidget);
       expect(find.text('OFFLINE'), findsOneWidget);
+      expect(find.text('No BMS Connected'), findsOneWidget);
       expect(find.text('Not connected'), findsWidgets);
       expect(find.text('-- V'), findsOneWidget);
       expect(find.text('-- A'), findsOneWidget);

@@ -2,11 +2,56 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 // ============================================================================
+// MODEL: BmsDevice
+// ============================================================================
+
+/// Identifies a specific physical BMS unit detected over Bluetooth LE.
+class BmsDevice {
+  /// Unique Hardware identifier (e.g. MAC address or BLE Peripheral UUID).
+  final String id;
+
+  /// Advertised or user-assigned device name.
+  final String name;
+
+  /// Pack chemistry / specification model description.
+  final String model;
+
+  /// Received Signal Strength Indication (dBm), e.g. -58 dBm.
+  final int rssi;
+
+  /// Current pack voltage preview.
+  final double voltage;
+
+  /// Current state of charge preview.
+  final double socPercent;
+
+  const BmsDevice({
+    required this.id,
+    required this.name,
+    required this.model,
+    required this.rssi,
+    required this.voltage,
+    required this.socPercent,
+  });
+
+  /// Human-readable signal quality rating.
+  String get signalStrength {
+    if (rssi >= -65) return 'Excellent';
+    if (rssi >= -75) return 'Good';
+    if (rssi >= -85) return 'Fair';
+    return 'Weak';
+  }
+}
+
+// ============================================================================
 // MODEL: BatteryData
 // ============================================================================
 
-/// Immutable telemetry model representing live battery status.
+/// Immutable telemetry model representing live battery status for an active device.
 class BatteryData {
+  /// The physical device currently being monitored and controlled.
+  final BmsDevice? device;
+
   /// State of charge percentage (0.0 to 100.0).
   final double socPercent;
 
@@ -26,6 +71,7 @@ class BatteryData {
   final bool isConnected;
 
   const BatteryData({
+    this.device,
     required this.socPercent,
     required this.voltage,
     required this.current,
@@ -38,6 +84,7 @@ class BatteryData {
   double get powerWatts => voltage * current;
 
   BatteryData copyWith({
+    BmsDevice? device,
     double? socPercent,
     double? voltage,
     double? current,
@@ -46,6 +93,7 @@ class BatteryData {
     bool? isConnected,
   }) {
     return BatteryData(
+      device: device ?? this.device,
       socPercent: socPercent ?? this.socPercent,
       voltage: voltage ?? this.voltage,
       current: current ?? this.current,
@@ -57,6 +105,14 @@ class BatteryData {
 
   /// Initial default/mock data for preview and development.
   static const BatteryData mockDefault = BatteryData(
+    device: BmsDevice(
+      id: 'A4:C1:38:7B:A1:04',
+      name: 'VoltBMS-Main-Pack',
+      model: '16S LiFePO4 • 48V 100Ah',
+      rssi: -58,
+      voltage: 51.84,
+      socPercent: 78.0,
+    ),
     socPercent: 78.0,
     voltage: 51.84,
     current: -12.40, // Discharging at 12.4 A
@@ -75,17 +131,48 @@ class BatteryData {
 /// ### Why ChangeNotifier?
 /// 1. **Zero External Dependencies**: Works out-of-the-box in any Flutter project
 ///    without imposing Riverpod, Provider, or Bloc dependencies.
-/// 2. **Clean Separation of Concerns**: Decouples the safety-critical MOSFET logic
-///    and BLE hardware communication from widget presentation.
+/// 2. **Clean Separation of Concerns**: Decouples the safety-critical MOSFET logic,
+///    device discovery, and BLE hardware communication from widget presentation.
 /// 3. **Interoperable**: Can be directly consumed via [ListenableBuilder], or
 ///    easily adapted to Riverpod (`ChangeNotifierProvider`), Provider, or Streams.
 class BmsController extends ChangeNotifier {
   BatteryData _data;
+  bool _isScanning = false;
+
+  /// Sample mock list of nearby discovered BMS units.
+  final List<BmsDevice> _availableDevices = const [
+    BmsDevice(
+      id: 'A4:C1:38:7B:A1:04',
+      name: 'VoltBMS-Main-Pack',
+      model: '16S LiFePO4 • 48V 100Ah',
+      rssi: -58,
+      voltage: 51.84,
+      socPercent: 78.0,
+    ),
+    BmsDevice(
+      id: 'B8:27:EB:12:34:56',
+      name: 'VoltBMS-Aux-Pack',
+      model: '16S LiFePO4 • 48V 50Ah',
+      rssi: -71,
+      voltage: 52.10,
+      socPercent: 91.0,
+    ),
+    BmsDevice(
+      id: 'DC:A6:32:89:FE:10',
+      name: 'SolarStorage-BMS-02',
+      model: '8S LFP • 24V 200Ah',
+      rssi: -84,
+      voltage: 26.40,
+      socPercent: 45.0,
+    ),
+  ];
 
   BmsController({BatteryData? initialData})
       : _data = initialData ?? BatteryData.mockDefault;
 
   BatteryData get data => _data;
+  bool get isScanning => _isScanning;
+  List<BmsDevice> get availableDevices => _availableDevices;
 
   /// Updates live battery telemetry (e.g. from BLE notification stream).
   void updateTelemetry(BatteryData newData) {
@@ -96,6 +183,58 @@ class BmsController extends ChangeNotifier {
   /// Toggles mock connection status for testing and visual validation.
   void toggleMockConnection() {
     _data = _data.copyWith(isConnected: !_data.isConnected);
+    notifyListeners();
+  }
+
+  /// Connects to and switches control to the specified BMS device.
+  Future<void> selectDevice(BmsDevice device) async {
+    // =========================================================================
+    // TODO: BLE Integration Point - Connect to Peripheral
+    // Replace this mock switch with your actual BLE connection call:
+    //
+    // Example:
+    // await bleAdapter.connect(device.id);
+    // await bleAdapter.discoverServices();
+    // =========================================================================
+
+    _data = BatteryData(
+      device: device,
+      socPercent: device.socPercent,
+      voltage: device.voltage,
+      current: -5.0, // Mock initial current
+      chargingEnabled: true,
+      dischargingEnabled: true,
+      isConnected: true,
+    );
+    notifyListeners();
+  }
+
+  /// Simulates or triggers a BLE scan for nearby BMS peripherals.
+  Future<void> scanDevices() async {
+    _isScanning = true;
+    notifyListeners();
+
+    // =========================================================================
+    // TODO: BLE Integration Point - Peripheral Scanning
+    // Replace this simulated delay with real BLE scan subscription:
+    //
+    // Example:
+    // bleAdapter.startScan(withServices: [BMS_SERVICE_UUID]);
+    // =========================================================================
+
+    await Future.delayed(const Duration(milliseconds: 1200));
+    _isScanning = false;
+    notifyListeners();
+  }
+
+  /// Disconnects from the current active BMS.
+  Future<void> disconnectCurrentDevice() async {
+    // =========================================================================
+    // TODO: BLE Integration Point - Disconnect Peripheral
+    // await bleAdapter.disconnect(_data.device?.id);
+    // =========================================================================
+
+    _data = _data.copyWith(isConnected: false);
     notifyListeners();
   }
 
@@ -191,17 +330,19 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // SAFETY CONFIRMATION DIALOG
+  // SAFETY CONFIRMATION DIALOG (CLEARLY IDENTIFIES TARGET DEVICE)
   // ---------------------------------------------------------------------------
 
   Future<void> _handleChargeToggle(BuildContext context, bool currentState) async {
+    final deviceName = _controller.data.device?.name ?? 'BMS Device';
     final targetState = !currentState;
+
     final confirmed = await _showSafetyConfirmationDialog(
       context: context,
       title: targetState ? 'Enable Charging?' : 'Disable Charging?',
       warningMessage: targetState
-          ? 'This will close the Charge MOSFET and allow external current to flow into the battery. Ensure charger voltage and limits are compatible.'
-          : 'This will open the Charge MOSFET. The battery will immediately stop accepting power from chargers and solar inputs.',
+          ? 'Target: "$deviceName"\n\nThis will close the Charge MOSFET and allow external charging current into the pack. Ensure charger voltage and limits are strictly compatible.'
+          : 'Target: "$deviceName"\n\nThis will open the Charge MOSFET. The battery will immediately stop accepting power from chargers and solar inputs.',
       actionLabel: targetState ? 'Enable Charge' : 'Turn OFF Charge',
       isDestructive: !targetState,
     );
@@ -212,13 +353,15 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
   }
 
   Future<void> _handleDischargeToggle(BuildContext context, bool currentState) async {
+    final deviceName = _controller.data.device?.name ?? 'BMS Device';
     final targetState = !currentState;
+
     final confirmed = await _showSafetyConfirmationDialog(
       context: context,
       title: targetState ? 'Enable Discharging?' : 'Cut Power Output?',
       warningMessage: targetState
-          ? 'This will close the Discharge MOSFET and energize all connected equipment, inverters, and loads.'
-          : 'Turn OFF discharge? This will immediately open the MOSFET and CUT POWER to all connected loads and devices.',
+          ? 'Target: "$deviceName"\n\nThis will close the Discharge MOSFET and energize all connected equipment, inverters, and loads.'
+          : 'Target: "$deviceName"\n\nTurn OFF discharge? This will immediately open the MOSFET and CUT POWER to all connected loads and equipment.',
       actionLabel: targetState ? 'Enable Discharge' : 'Cut Output Power',
       isDestructive: !targetState,
     );
@@ -304,6 +447,207 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
   }
 
   // ---------------------------------------------------------------------------
+  // DEVICE SELECTION BOTTOM SHEET
+  // ---------------------------------------------------------------------------
+
+  void _showDevicePickerBottomSheet(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (bottomSheetContext) {
+        return ListenableBuilder(
+          listenable: _controller,
+          builder: (context, _) {
+            final activeId = _controller.data.isConnected ? _controller.data.device?.id : null;
+
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Sheet Handle bar
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: colorScheme.outlineVariant,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Sheet Header
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Available BMS Units',
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              Text(
+                                'Select a physical battery to monitor and control',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton.filledTonal(
+                          tooltip: 'Scan for Devices',
+                          onPressed: _controller.isScanning ? null : () => _controller.scanDevices(),
+                          icon: _controller.isScanning
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.refresh_rounded),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // List of Available Devices
+                    ..._controller.availableDevices.map((dev) {
+                      final isCurrent = dev.id == activeId;
+
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Material(
+                          color: isCurrent
+                              ? colorScheme.primaryContainer.withValues(alpha: 0.35)
+                              : colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            side: BorderSide(
+                              color: isCurrent
+                                  ? colorScheme.primary
+                                  : colorScheme.outlineVariant.withValues(alpha: 0.5),
+                              width: isCurrent ? 2 : 1,
+                            ),
+                          ),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                            leading: CircleAvatar(
+                              backgroundColor: isCurrent
+                                  ? colorScheme.primary
+                                  : colorScheme.surfaceContainerHighest,
+                              foregroundColor: isCurrent
+                                  ? colorScheme.onPrimary
+                                  : colorScheme.onSurfaceVariant,
+                              child: Icon(
+                                isCurrent ? Icons.bluetooth_connected_rounded : Icons.bluetooth_rounded,
+                                size: 20,
+                              ),
+                            ),
+                            title: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    dev.name,
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                                if (isCurrent)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: colorScheme.primary,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Text(
+                                      'ACTIVE',
+                                      style: TextStyle(
+                                        color: colorScheme.onPrimary,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const SizedBox(height: 2),
+                                Text(
+                                  '${dev.model} • MAC: ${dev.id}',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    fontSize: 11,
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '${dev.socPercent.toInt()}% SOC • ${dev.voltage.toStringAsFixed(1)}V • Signal: ${dev.rssi} dBm (${dev.signalStrength})',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    fontSize: 11,
+                                    color: isCurrent ? colorScheme.primary : colorScheme.onSurfaceVariant,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            onTap: () {
+                              _controller.selectDevice(dev);
+                              Navigator.of(bottomSheetContext).pop();
+                            },
+                          ),
+                        ),
+                      );
+                    }),
+
+                    const SizedBox(height: 8),
+
+                    // Disconnect Option
+                    if (_controller.data.isConnected)
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                          foregroundColor: colorScheme.error,
+                          side: BorderSide(color: colorScheme.error.withValues(alpha: 0.5)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        onPressed: () {
+                          _controller.disconnectCurrentDevice();
+                          Navigator.of(bottomSheetContext).pop();
+                        },
+                        icon: const Icon(Icons.link_off_rounded),
+                        label: const Text('Disconnect Current Device'),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // BUILD METHOD & HIERARCHICAL LAYOUT
   // ---------------------------------------------------------------------------
 
@@ -332,22 +676,27 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        // --- 1. Minimal Header with Connection Indicator ---
+                        // --- 1. Top Header with Active Device Identity Card ---
                         _buildHeader(context, data),
 
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 12),
 
-                        // --- 2. Primary Element: Hero Battery SOC Ring & Percentage ---
+                        // --- 2. Active Target Device Identity Banner ---
+                        _buildActiveDeviceCard(context, data),
+
+                        const SizedBox(height: 16),
+
+                        // --- 3. Primary Element: Hero Battery SOC Ring & Percentage ---
                         _buildHeroBatterySoc(context, data),
 
-                        const SizedBox(height: 32),
+                        const SizedBox(height: 24),
 
-                        // --- 3. Safety-Relevant MOSFET Controls (Charge / Discharge) ---
+                        // --- 4. Safety-Relevant MOSFET Controls (Charge / Discharge) ---
                         _buildMosfetSwitches(context, data, constraints.maxWidth),
 
-                        const SizedBox(height: 32),
+                        const SizedBox(height: 24),
 
-                        // --- 4. Visually Secondary Telemetry Row (Voltage, Current, Power) ---
+                        // --- 5. Visually Secondary Telemetry Row (Voltage, Current, Power) ---
                         _buildSecondaryTelemetry(context, data),
 
                         const SizedBox(height: 8),
@@ -381,20 +730,20 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
             Text(
               'BMS Monitor',
               style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
+                fontWeight: FontWeight.w800,
                 letterSpacing: 0.2,
                 color: colorScheme.onSurface,
               ),
             ),
             Text(
-              'VoltOS v1.0',
+              'VoltOS Hardware Controller',
               style: theme.textTheme.labelSmall?.copyWith(
                 color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
               ),
             ),
           ],
         ),
-        // Interactive connection badge (tap to toggle for testing/simulation)
+        // Interactive connection badge (tap to toggle connection state for testing)
         InkWell(
           borderRadius: BorderRadius.circular(20),
           onTap: () => _controller.toggleMockConnection(),
@@ -436,6 +785,114 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // ACTIVE DEVICE IDENTITY CARD
+  // ---------------------------------------------------------------------------
+
+  Widget _buildActiveDeviceCard(BuildContext context, BatteryData data) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isConnected = data.isConnected;
+    final device = data.device;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _showDevicePickerBottomSheet(context),
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: isConnected
+                ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.4)
+                : colorScheme.errorContainer.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isConnected
+                  ? colorScheme.outlineVariant.withValues(alpha: 0.6)
+                  : colorScheme.error.withValues(alpha: 0.3),
+              width: 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isConnected
+                      ? colorScheme.primary.withValues(alpha: 0.15)
+                      : colorScheme.error.withValues(alpha: 0.15),
+                ),
+                child: Icon(
+                  isConnected ? Icons.bluetooth_connected_rounded : Icons.bluetooth_disabled_rounded,
+                  size: 20,
+                  color: isConnected ? colorScheme.primary : colorScheme.error,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            isConnected ? (device?.name ?? 'Unknown BMS') : 'No BMS Connected',
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              color: colorScheme.onSurface,
+                            ),
+                          ),
+                        ),
+                        if (isConnected && device != null) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: colorScheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              '${device.rssi} dBm',
+                              style: TextStyle(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                                color: colorScheme.onPrimaryContainer,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      isConnected
+                          ? 'MAC: ${device?.id ?? "N/A"} • Tap to switch'
+                          : 'Tap to scan and pair BMS hardware',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontSize: 11,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.swap_horiz_rounded,
+                size: 20,
+                color: colorScheme.primary,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
