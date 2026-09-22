@@ -101,7 +101,7 @@ void main() {
       await tester.tap(find.text('Devices'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Bluetooth LE Hardware Scanner'), findsOneWidget);
+      expect(find.text('Bluetooth LE Scanner'), findsOneWidget);
       expect(find.text('No Bluetooth Devices Detected'), findsOneWidget);
       expect(find.text('Load Demo Battery (Test UI)'), findsOneWidget);
 
