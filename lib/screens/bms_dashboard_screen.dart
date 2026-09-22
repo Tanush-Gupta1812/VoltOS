@@ -5,24 +5,13 @@ import 'package:flutter/material.dart';
 // MODEL: BmsDevice
 // ============================================================================
 
-/// Identifies a specific physical BMS unit detected over Bluetooth LE.
+/// Identifies a physical BMS unit detected over Bluetooth LE.
 class BmsDevice {
-  /// Unique Hardware identifier (e.g. MAC address or BLE Peripheral UUID).
-  final String id;
-
-  /// Advertised or user-assigned device name.
+  final String id; // MAC address or UUID
   final String name;
-
-  /// Pack chemistry / specification model description.
   final String model;
-
-  /// Received Signal Strength Indication (dBm), e.g. -58 dBm.
-  final int rssi;
-
-  /// Current pack voltage preview.
+  final int rssi; // Signal dBm
   final double voltage;
-
-  /// Current state of charge preview.
   final double socPercent;
 
   const BmsDevice({
@@ -34,7 +23,6 @@ class BmsDevice {
     required this.socPercent,
   });
 
-  /// Human-readable signal quality rating.
   String get signalStrength {
     if (rssi >= -65) return 'Excellent';
     if (rssi >= -75) return 'Good';
@@ -44,70 +32,143 @@ class BmsDevice {
 }
 
 // ============================================================================
+// MODEL: BatteryProtectionStatus
+// ============================================================================
+
+/// Live hardware safety protection alarms matching BAT-BMS / Lossigy.
+class BatteryProtectionStatus {
+  final bool overVoltage;
+  final bool underVoltage;
+  final bool chargeOverCurrent;
+  final bool dischargeOverCurrent;
+  final bool overTemperature;
+  final bool lowTemperature;
+  final bool shortCircuit;
+
+  const BatteryProtectionStatus({
+    this.overVoltage = false,
+    this.underVoltage = false,
+    this.chargeOverCurrent = false,
+    this.dischargeOverCurrent = false,
+    this.overTemperature = false,
+    this.lowTemperature = false,
+    this.shortCircuit = false,
+  });
+
+  bool get hasAnyFault =>
+      overVoltage ||
+      underVoltage ||
+      chargeOverCurrent ||
+      dischargeOverCurrent ||
+      overTemperature ||
+      lowTemperature ||
+      shortCircuit;
+}
+
+// ============================================================================
 // MODEL: BatteryData
 // ============================================================================
 
-/// Immutable telemetry model representing live battery status for an active device.
+/// Comprehensive telemetry model mirroring BAT-BMS and Lossigy data fields.
 class BatteryData {
-  /// The physical device currently being monitored and controlled.
   final BmsDevice? device;
-
-  /// State of charge percentage (0.0 to 100.0).
-  final double socPercent;
-
-  /// Pack voltage in Volts (e.g. 51.8 V).
-  final double voltage;
-
-  /// Pack current in Amperes (+ for charging, - for discharging, 0 for idle).
-  final double current;
-
-  /// State of the physical Charge MOSFET gate.
-  final bool chargingEnabled;
-
-  /// State of the physical Discharge MOSFET gate.
-  final bool dischargingEnabled;
-
-  /// Connection status to the physical BLE peripheral.
+  final double socPercent; // 0.0 to 100.0
+  final double voltage; // Pack Volts (e.g. 51.84 V)
+  final double current; // Amps (+ charge, - discharge)
+  final double nominalCapacityAh; // e.g. 100.0 Ah
+  final double remainingCapacityAh; // e.g. 78.0 Ah
+  final int cycleCount; // e.g. 142
+  final double cellTemp1; // °C
+  final double cellTemp2; // °C
+  final double mosTemp; // °C
+  final double ambientTemp; // °C
+  final bool chargingEnabled; // Charge MOSFET
+  final bool dischargingEnabled; // Discharge MOSFET
+  final bool balanceEnabled; // Active/Passive Cell Balancer
   final bool isConnected;
+  final List<double> cellVoltages; // 16S Pack cell voltages
+  final BatteryProtectionStatus protection;
 
   const BatteryData({
     this.device,
     required this.socPercent,
     required this.voltage,
     required this.current,
+    this.nominalCapacityAh = 100.0,
+    this.remainingCapacityAh = 78.0,
+    this.cycleCount = 142,
+    this.cellTemp1 = 27.4,
+    this.cellTemp2 = 28.1,
+    this.mosTemp = 32.5,
+    this.ambientTemp = 25.8,
     required this.chargingEnabled,
     required this.dischargingEnabled,
+    this.balanceEnabled = true,
     required this.isConnected,
+    this.cellVoltages = const [
+      3.241, 3.238, 3.240, 3.242, 3.239, 3.241, 3.237, 3.240,
+      3.238, 3.241, 3.230, 3.240, 3.239, 3.242, 3.238, 3.241,
+    ],
+    this.protection = const BatteryProtectionStatus(),
   });
 
-  /// Instantaneous power in Watts (P = V * I).
   double get powerWatts => voltage * current;
+
+  double get maxCellVoltage =>
+      cellVoltages.isNotEmpty ? cellVoltages.reduce(math.max) : 0.0;
+
+  double get minCellVoltage =>
+      cellVoltages.isNotEmpty ? cellVoltages.reduce(math.min) : 0.0;
+
+  double get cellDeltaVoltage => maxCellVoltage - minCellVoltage;
+
+  int get maxCellIndex => cellVoltages.indexOf(maxCellVoltage) + 1;
+  int get minCellIndex => cellVoltages.indexOf(minCellVoltage) + 1;
 
   BatteryData copyWith({
     BmsDevice? device,
     double? socPercent,
     double? voltage,
     double? current,
+    double? nominalCapacityAh,
+    double? remainingCapacityAh,
+    int? cycleCount,
+    double? cellTemp1,
+    double? cellTemp2,
+    double? mosTemp,
+    double? ambientTemp,
     bool? chargingEnabled,
     bool? dischargingEnabled,
+    bool? balanceEnabled,
     bool? isConnected,
+    List<double>? cellVoltages,
+    BatteryProtectionStatus? protection,
   }) {
     return BatteryData(
       device: device ?? this.device,
       socPercent: socPercent ?? this.socPercent,
       voltage: voltage ?? this.voltage,
       current: current ?? this.current,
+      nominalCapacityAh: nominalCapacityAh ?? this.nominalCapacityAh,
+      remainingCapacityAh: remainingCapacityAh ?? this.remainingCapacityAh,
+      cycleCount: cycleCount ?? this.cycleCount,
+      cellTemp1: cellTemp1 ?? this.cellTemp1,
+      cellTemp2: cellTemp2 ?? this.cellTemp2,
+      mosTemp: mosTemp ?? this.mosTemp,
+      ambientTemp: ambientTemp ?? this.ambientTemp,
       chargingEnabled: chargingEnabled ?? this.chargingEnabled,
       dischargingEnabled: dischargingEnabled ?? this.dischargingEnabled,
+      balanceEnabled: balanceEnabled ?? this.balanceEnabled,
       isConnected: isConnected ?? this.isConnected,
+      cellVoltages: cellVoltages ?? this.cellVoltages,
+      protection: protection ?? this.protection,
     );
   }
 
-  /// Initial default/mock data for preview and development.
   static const BatteryData mockDefault = BatteryData(
     device: BmsDevice(
       id: 'A4:C1:38:7B:A1:04',
-      name: 'VoltBMS-Main-Pack',
+      name: 'BAT-BMS-001',
       model: '16S LiFePO4 • 48V 100Ah',
       rssi: -58,
       voltage: 51.84,
@@ -115,35 +176,33 @@ class BatteryData {
     ),
     socPercent: 78.0,
     voltage: 51.84,
-    current: -12.40, // Discharging at 12.4 A
+    current: -12.40,
+    nominalCapacityAh: 100.0,
+    remainingCapacityAh: 78.0,
+    cycleCount: 142,
+    cellTemp1: 27.4,
+    cellTemp2: 28.1,
+    mosTemp: 32.5,
+    ambientTemp: 25.8,
     chargingEnabled: true,
     dischargingEnabled: true,
+    balanceEnabled: true,
     isConnected: true,
   );
 }
 
 // ============================================================================
-// CONTROLLER / STATE NOTIFIER: BmsController
+// CONTROLLER: BmsController
 // ============================================================================
 
-/// State management controller using Flutter's native [ChangeNotifier].
-///
-/// ### Why ChangeNotifier?
-/// 1. **Zero External Dependencies**: Works out-of-the-box in any Flutter project
-///    without imposing Riverpod, Provider, or Bloc dependencies.
-/// 2. **Clean Separation of Concerns**: Decouples the safety-critical MOSFET logic,
-///    device discovery, and BLE hardware communication from widget presentation.
-/// 3. **Interoperable**: Can be directly consumed via [ListenableBuilder], or
-///    easily adapted to Riverpod (`ChangeNotifierProvider`), Provider, or Streams.
 class BmsController extends ChangeNotifier {
   BatteryData _data;
   bool _isScanning = false;
 
-  /// Sample mock list of nearby discovered BMS units.
   final List<BmsDevice> _availableDevices = const [
     BmsDevice(
       id: 'A4:C1:38:7B:A1:04',
-      name: 'VoltBMS-Main-Pack',
+      name: 'BAT-BMS-001',
       model: '16S LiFePO4 • 48V 100Ah',
       rssi: -58,
       voltage: 51.84,
@@ -151,7 +210,7 @@ class BmsController extends ChangeNotifier {
     ),
     BmsDevice(
       id: 'B8:27:EB:12:34:56',
-      name: 'VoltBMS-Aux-Pack',
+      name: 'Lossigy-48V-Aux',
       model: '16S LiFePO4 • 48V 50Ah',
       rssi: -71,
       voltage: 52.10,
@@ -159,7 +218,7 @@ class BmsController extends ChangeNotifier {
     ),
     BmsDevice(
       id: 'DC:A6:32:89:FE:10',
-      name: 'SolarStorage-BMS-02',
+      name: 'Lossigy-Solar-Bank',
       model: '8S LFP • 24V 200Ah',
       rssi: -84,
       voltage: 26.40,
@@ -174,130 +233,85 @@ class BmsController extends ChangeNotifier {
   bool get isScanning => _isScanning;
   List<BmsDevice> get availableDevices => _availableDevices;
 
-  /// Updates live battery telemetry (e.g. from BLE notification stream).
   void updateTelemetry(BatteryData newData) {
     _data = newData;
     notifyListeners();
   }
 
-  /// Toggles mock connection status for testing and visual validation.
   void toggleMockConnection() {
     _data = _data.copyWith(isConnected: !_data.isConnected);
     notifyListeners();
   }
 
-  /// Connects to and switches control to the specified BMS device.
   Future<void> selectDevice(BmsDevice device) async {
     // =========================================================================
-    // TODO: BLE Integration Point - Connect to Peripheral
-    // Replace this mock switch with your actual BLE connection call:
-    //
-    // Example:
+    // TODO: BLE Integration Point - Peripheral Connection
     // await bleAdapter.connect(device.id);
-    // await bleAdapter.discoverServices();
     // =========================================================================
-
     _data = BatteryData(
       device: device,
       socPercent: device.socPercent,
       voltage: device.voltage,
-      current: -5.0, // Mock initial current
+      current: -6.50,
+      remainingCapacityAh: (device.socPercent / 100.0) * 100.0,
       chargingEnabled: true,
       dischargingEnabled: true,
+      balanceEnabled: true,
       isConnected: true,
     );
     notifyListeners();
   }
 
-  /// Simulates or triggers a BLE scan for nearby BMS peripherals.
   Future<void> scanDevices() async {
     _isScanning = true;
     notifyListeners();
 
     // =========================================================================
     // TODO: BLE Integration Point - Peripheral Scanning
-    // Replace this simulated delay with real BLE scan subscription:
-    //
-    // Example:
-    // bleAdapter.startScan(withServices: [BMS_SERVICE_UUID]);
+    // bleAdapter.startScan();
     // =========================================================================
-
     await Future.delayed(const Duration(milliseconds: 1200));
     _isScanning = false;
     notifyListeners();
   }
 
-  /// Disconnects from the current active BMS.
   Future<void> disconnectCurrentDevice() async {
-    // =========================================================================
-    // TODO: BLE Integration Point - Disconnect Peripheral
-    // await bleAdapter.disconnect(_data.device?.id);
-    // =========================================================================
-
     _data = _data.copyWith(isConnected: false);
     notifyListeners();
   }
 
-  /// Requests setting the physical Charge MOSFET state.
-  ///
-  /// This executes only AFTER the user confirms via the safety dialog.
   Future<void> setChargingEnabled(bool enable) async {
     if (!_data.isConnected) return;
-
-    // =========================================================================
-    // TODO: BLE Integration Point - Charge MOSFET Write Command
-    // Replace this local state update with your actual BLE write call:
-    //
-    // Example:
-    // await bleAdapter.writeCharacteristic(
-    //   serviceUuid: '0000ffe0-0000-1000-8000-00805f9b34fb',
-    //   characteristicUuid: '0000ffe1-0000-1000-8000-00805f9b34fb',
-    //   data: [0xDD, 0x5A, 0x01, enable ? 0x01 : 0x00, 0x77],
-    // );
-    // =========================================================================
-
+    // TODO: BLE Integration Point - Write Charge MOSFET
     _data = _data.copyWith(
       chargingEnabled: enable,
-      // Adjust current if charging was shut down while receiving power:
       current: (!enable && _data.current > 0) ? 0.0 : _data.current,
     );
     notifyListeners();
   }
 
-  /// Requests setting the physical Discharge MOSFET state.
-  ///
-  /// This executes only AFTER the user confirms via the safety dialog.
   Future<void> setDischargingEnabled(bool enable) async {
     if (!_data.isConnected) return;
-
-    // =========================================================================
-    // TODO: BLE Integration Point - Discharge MOSFET Write Command
-    // Replace this local state update with your actual BLE write call:
-    //
-    // Example:
-    // await bleAdapter.writeCharacteristic(
-    //   serviceUuid: '0000ffe0-0000-1000-8000-00805f9b34fb',
-    //   characteristicUuid: '0000ffe1-0000-1000-8000-00805f9b34fb',
-    //   data: [0xDD, 0x5A, 0x02, enable ? 0x01 : 0x00, 0x77],
-    // );
-    // =========================================================================
-
+    // TODO: BLE Integration Point - Write Discharge MOSFET
     _data = _data.copyWith(
       dischargingEnabled: enable,
-      // Cut load current to zero if discharge is turned off:
       current: (!enable && _data.current < 0) ? 0.0 : _data.current,
     );
+    notifyListeners();
+  }
+
+  Future<void> setBalanceEnabled(bool enable) async {
+    if (!_data.isConnected) return;
+    _data = _data.copyWith(balanceEnabled: enable);
     notifyListeners();
   }
 }
 
 // ============================================================================
-// SCREEN WIDGET: BmsDashboardScreen
+// MAIN REPLICA DASHBOARD SCREEN (BAT-BMS / Lossigy layout)
 // ============================================================================
 
-/// Minimal, safety-conscious main dashboard screen for the BMS Monitor app.
 class BmsDashboardScreen extends StatefulWidget {
-  /// Optional injected controller for testing or custom dependency injection.
   final BmsController? controller;
 
   const BmsDashboardScreen({super.key, this.controller});
@@ -309,6 +323,7 @@ class BmsDashboardScreen extends StatefulWidget {
 class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
   late final BmsController _controller;
   bool _isLocalController = false;
+  int _currentTabIndex = 0;
 
   @override
   void initState() {
@@ -330,7 +345,7 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // SAFETY CONFIRMATION DIALOG (CLEARLY IDENTIFIES TARGET DEVICE)
+  // SAFETY CONFIRMATION DIALOG
   // ---------------------------------------------------------------------------
 
   Future<void> _handleChargeToggle(BuildContext context, bool currentState) async {
@@ -341,7 +356,7 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
       context: context,
       title: targetState ? 'Enable Charging?' : 'Disable Charging?',
       warningMessage: targetState
-          ? 'Target: "$deviceName"\n\nThis will close the Charge MOSFET and allow external charging current into the pack. Ensure charger voltage and limits are strictly compatible.'
+          ? 'Target: "$deviceName"\n\nThis will close the Charge MOSFET and allow external charging current into the battery pack.'
           : 'Target: "$deviceName"\n\nThis will open the Charge MOSFET. The battery will immediately stop accepting power from chargers and solar inputs.',
       actionLabel: targetState ? 'Enable Charge' : 'Turn OFF Charge',
       isDestructive: !targetState,
@@ -447,7 +462,7 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // DEVICE SELECTION BOTTOM SHEET
+  // DEVICE PICKER BOTTOM SHEET
   // ---------------------------------------------------------------------------
 
   void _showDevicePickerBottomSheet(BuildContext context) {
@@ -474,7 +489,6 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Sheet Handle bar
                     Center(
                       child: Container(
                         width: 40,
@@ -486,8 +500,6 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
-
-                    // Sheet Header
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -524,8 +536,6 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
                       ],
                     ),
                     const SizedBox(height: 16),
-
-                    // List of Available Devices
                     ..._controller.availableDevices.map((dev) {
                       final isCurrent = dev.id == activeId;
 
@@ -616,10 +626,7 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
                         ),
                       );
                     }),
-
                     const SizedBox(height: 8),
-
-                    // Disconnect Option
                     if (_controller.data.isConnected)
                       OutlinedButton.icon(
                         style: OutlinedButton.styleFrom(
@@ -648,7 +655,7 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // BUILD METHOD & HIERARCHICAL LAYOUT
+  // MAIN SCAFFOLD WITH TABS (Dashboard, Cells, Controls & Protection, Devices)
   // ---------------------------------------------------------------------------
 
   @override
@@ -664,48 +671,66 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
         return Scaffold(
           backgroundColor: colorScheme.surface,
           body: SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: math.max(0, constraints.maxHeight - 32),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        // --- 1. Top Header with Active Device Identity Card ---
-                        _buildHeader(context, data),
+            child: Column(
+              children: [
+                // Top Global Bar: App Title & BLE Connection Status
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+                  child: _buildTopBar(context, data),
+                ),
 
-                        const SizedBox(height: 12),
+                // Active Target Device Identity Card (BAT-BMS / Lossigy Header)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                  child: _buildActiveDeviceCard(context, data),
+                ),
 
-                        // --- 2. Active Target Device Identity Banner ---
-                        _buildActiveDeviceCard(context, data),
+                const SizedBox(height: 8),
 
-                        const SizedBox(height: 16),
-
-                        // --- 3. Primary Element: Hero Battery SOC Ring & Percentage ---
-                        _buildHeroBatterySoc(context, data),
-
-                        const SizedBox(height: 24),
-
-                        // --- 4. Safety-Relevant MOSFET Controls (Charge / Discharge) ---
-                        _buildMosfetSwitches(context, data, constraints.maxWidth),
-
-                        const SizedBox(height: 24),
-
-                        // --- 5. Visually Secondary Telemetry Row (Voltage, Current, Power) ---
-                        _buildSecondaryTelemetry(context, data),
-
-                        const SizedBox(height: 8),
-                      ],
-                    ),
+                // Main Content View based on Active Tab
+                Expanded(
+                  child: IndexedStack(
+                    index: _currentTabIndex,
+                    children: [
+                      _buildDashboardTab(context, data),
+                      _buildCellsTab(context, data),
+                      _buildControlsAndProtectionTab(context, data),
+                      _buildDevicesTab(context, data),
+                    ],
                   ),
-                );
-              },
+                ),
+              ],
             ),
+          ),
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: _currentTabIndex,
+            onDestinationSelected: (index) {
+              setState(() {
+                _currentTabIndex = index;
+              });
+            },
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.speed_rounded),
+                selectedIcon: Icon(Icons.speed_rounded),
+                label: 'Dashboard',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.battery_charging_full_rounded),
+                selectedIcon: Icon(Icons.battery_charging_full_rounded),
+                label: 'Cells',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.shield_outlined),
+                selectedIcon: Icon(Icons.shield_rounded),
+                label: 'Controls',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.bluetooth_searching_rounded),
+                selectedIcon: Icon(Icons.bluetooth_searching_rounded),
+                label: 'Devices',
+              ),
+            ],
           ),
         );
       },
@@ -713,10 +738,10 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // HEADER
+  // TOP BAR
   // ---------------------------------------------------------------------------
 
-  Widget _buildHeader(BuildContext context, BatteryData data) {
+  Widget _buildTopBar(BuildContext context, BatteryData data) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final isConnected = data.isConnected;
@@ -724,26 +749,42 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        Row(
           children: [
-            Text(
-              'BMS Monitor',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.2,
-                color: colorScheme.onSurface,
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: colorScheme.primaryContainer,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.bolt_rounded,
+                size: 20,
+                color: colorScheme.onPrimaryContainer,
               ),
             ),
-            Text(
-              'VoltOS Hardware Controller',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
-              ),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'BAT-BMS Pro',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                Text(
+                  'Lossigy Diagnostic Suite',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                    fontSize: 10,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
-        // Interactive connection badge (tap to toggle connection state for testing)
         InkWell(
           borderRadius: BorderRadius.circular(20),
           onTap: () => _controller.toggleMockConnection(),
@@ -776,7 +817,7 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
                 Text(
                   isConnected ? 'BLE Connected' : 'Disconnected',
                   style: theme.textTheme.labelSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                     color: isConnected ? colorScheme.onSurface : colorScheme.error,
                   ),
                 ),
@@ -789,7 +830,7 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // ACTIVE DEVICE IDENTITY CARD
+  // ACTIVE DEVICE CARD
   // ---------------------------------------------------------------------------
 
   Widget _buildActiveDeviceCard(BuildContext context, BatteryData data) {
@@ -896,6 +937,186 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
     );
   }
 
+  // ===========================================================================
+  // TAB 1: DASHBOARD TAB (Hero Gauge, Capacity, MOSFET Switches, Temperatures)
+  // ===========================================================================
+
+  Widget _buildDashboardTab(BuildContext context, BatteryData data) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Hero Battery SOC Dial
+              _buildHeroBatterySoc(context, data),
+
+              const SizedBox(height: 18),
+
+              // Capacity & Health Bar
+              _buildCapacitySummary(context, data),
+
+              const SizedBox(height: 18),
+
+              // Safety-Critical MOSFET Controls (Charge & Discharge)
+              _buildMosfetSwitches(context, data, constraints.maxWidth),
+
+              const SizedBox(height: 20),
+
+              // Primary Telemetry Section (Voltage, Current, Power)
+              _buildSecondaryTelemetry(context, data),
+
+              const SizedBox(height: 16),
+
+              // Temperatures Section (Cell 1, Cell 2, MOS, Ambient)
+              _buildTemperatureSection(context, data),
+
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCapacitySummary(BuildContext context, BatteryData data) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isConnected = data.isConnected;
+
+    final remainingAh = isConnected ? '${data.remainingCapacityAh.toStringAsFixed(1)} Ah' : '-- Ah';
+    final nominalAh = isConnected ? '${data.nominalCapacityAh.toStringAsFixed(0)} Ah' : '-- Ah';
+    final cycles = isConnected ? '${data.cycleCount}' : '--';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withValues(alpha: 0.4),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _buildCompactMetric('REMAINING', remainingAh, Icons.battery_std_rounded),
+          Container(height: 28, width: 1, color: colorScheme.outlineVariant),
+          _buildCompactMetric('CAPACITY', nominalAh, Icons.straighten_rounded),
+          Container(height: 28, width: 1, color: colorScheme.outlineVariant),
+          _buildCompactMetric('CYCLES', cycles, Icons.loop_rounded),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactMetric(String label, String value, IconData icon) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Column(
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 12, color: colorScheme.onSurfaceVariant),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: theme.textTheme.labelSmall?.copyWith(
+                fontSize: 9.5,
+                fontWeight: FontWeight.w600,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 3),
+        Text(
+          value,
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTemperatureSection(BuildContext context, BatteryData data) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isConnected = data.isConnected;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.25),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.thermostat_rounded, size: 18, color: colorScheme.primary),
+              const SizedBox(width: 6),
+              Text(
+                'Thermal Probes (°C)',
+                style: theme.textTheme.labelLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildTempBadge('Cell T1', isConnected ? '${data.cellTemp1}°C' : '--'),
+              _buildTempBadge('Cell T2', isConnected ? '${data.cellTemp2}°C' : '--'),
+              _buildTempBadge('MOSFET', isConnected ? '${data.mosTemp}°C' : '--'),
+              _buildTempBadge('Ambient', isConnected ? '${data.ambientTemp}°C' : '--'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTempBadge(String label, String value) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontSize: 10,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            value,
+            style: theme.textTheme.labelMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // HERO SOC PERCENTAGE RING
   // ---------------------------------------------------------------------------
@@ -905,7 +1126,6 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
     final colorScheme = theme.colorScheme;
     final isConnected = data.isConnected;
 
-    // Determine state color
     final Color ringColor;
     if (!isConnected) {
       ringColor = colorScheme.outlineVariant;
@@ -917,7 +1137,6 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
       ringColor = colorScheme.primary;
     }
 
-    // Determine sub-label
     final String stateLabel;
     final IconData stateIcon;
     if (!isConnected) {
@@ -938,26 +1157,25 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
 
     return Center(
       child: SizedBox(
-        width: 230,
-        height: 230,
+        width: 210,
+        height: 210,
         child: CustomPaint(
           painter: _BatteryProgressRingPainter(
             progress: socFill,
             trackColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
             progressColor: ringColor,
-            strokeWidth: 16.0,
+            strokeWidth: 15.0,
           ),
           child: Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Top Status Icon with Label
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
                       stateIcon,
-                      size: 16,
+                      size: 15,
                       color: isConnected ? ringColor : colorScheme.onSurfaceVariant,
                     ),
                     const SizedBox(width: 4),
@@ -971,22 +1189,17 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
-
-                // Big Bold Percentage Display
+                const SizedBox(height: 4),
                 Text(
                   isConnected ? '${data.socPercent.toInt()}%' : '--%',
                   style: theme.textTheme.displayLarge?.copyWith(
                     fontWeight: FontWeight.w800,
-                    fontSize: 58,
+                    fontSize: 54,
                     letterSpacing: -1.5,
                     color: isConnected ? colorScheme.onSurface : colorScheme.onSurfaceVariant,
                   ),
                 ),
-
-                const SizedBox(height: 4),
-
-                // Subtle Battery Level text
+                const SizedBox(height: 2),
                 Text(
                   isConnected ? 'State of Charge' : 'Not Connected',
                   style: theme.textTheme.bodySmall?.copyWith(
@@ -1049,7 +1262,7 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
     return Row(
       children: [
         Expanded(child: chargeSwitch),
-        const SizedBox(width: 16),
+        const SizedBox(width: 14),
         Expanded(child: dischargeSwitch),
       ],
     );
@@ -1156,19 +1369,519 @@ class _BmsDashboardScreenState extends State<BmsDashboardScreen> {
       ],
     );
   }
+
+  // ===========================================================================
+  // TAB 2: CELLS TAB (16S Cell Balances, Max/Min, Delta V Bar Visualizer)
+  // ===========================================================================
+
+  Widget _buildCellsTab(BuildContext context, BatteryData data) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isConnected = data.isConnected;
+
+    final maxV = isConnected ? '${data.maxCellVoltage.toStringAsFixed(3)} V' : '-- V';
+    final minV = isConnected ? '${data.minCellVoltage.toStringAsFixed(3)} V' : '-- V';
+    final deltaV = isConnected ? '${(data.cellDeltaVoltage * 1000).toStringAsFixed(0)} mV' : '-- mV';
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Cell Diagnostics Summary Card
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: colorScheme.outlineVariant.withValues(alpha: 0.4)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildCellMetric('MAX CELL', maxV, '#${data.maxCellIndex}', Colors.blue.shade600),
+                Container(height: 36, width: 1, color: colorScheme.outlineVariant),
+                _buildCellMetric('MIN CELL', minV, '#${data.minCellIndex}', Colors.amber.shade700),
+                Container(height: 36, width: 1, color: colorScheme.outlineVariant),
+                _buildCellMetric('DELTA \u0394V', deltaV, 'Balance', Colors.teal.shade600),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '16S Cell Voltage Map',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              Row(
+                children: [
+                  Icon(Icons.balance_rounded, size: 14, color: Colors.teal.shade600),
+                  const SizedBox(width: 4),
+                  Text(
+                    data.balanceEnabled ? 'Balancing Active' : 'Balance Off',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: data.balanceEnabled ? Colors.teal.shade600 : colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+
+          // 16 Cells Grid
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: isConnected ? data.cellVoltages.length : 16,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+              childAspectRatio: 2.8,
+            ),
+            itemBuilder: (context, index) {
+              final cellNum = index + 1;
+              final cellVoltage = isConnected && index < data.cellVoltages.length
+                  ? data.cellVoltages[index]
+                  : 0.0;
+              final isMax = isConnected && cellNum == data.maxCellIndex;
+              final isMin = isConnected && cellNum == data.minCellIndex;
+
+              return _buildCellBarCard(
+                context: context,
+                cellNumber: cellNum,
+                voltage: cellVoltage,
+                isConnected: isConnected,
+                isMax: isMax,
+                isMin: isMin,
+              );
+            },
+          ),
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCellMetric(String title, String value, String subtitle, Color accentColor) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Column(
+      children: [
+        Text(
+          title,
+          style: theme.textTheme.labelSmall?.copyWith(
+            fontSize: 9.5,
+            fontWeight: FontWeight.w700,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w800,
+            color: accentColor,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          subtitle,
+          style: theme.textTheme.labelSmall?.copyWith(
+            fontSize: 10,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCellBarCard({
+    required BuildContext context,
+    required int cellNumber,
+    required double voltage,
+    required bool isConnected,
+    required bool isMax,
+    required bool isMin,
+  }) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    final progress = isConnected
+        ? ((voltage - 2.5) / (3.65 - 2.5)).clamp(0.0, 1.0)
+        : 0.0;
+
+    final barColor = isMax
+        ? Colors.blue.shade600
+        : (isMin ? Colors.amber.shade700 : colorScheme.primary);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isMax
+              ? Colors.blue.shade400
+              : (isMin
+                  ? Colors.amber.shade400
+                  : colorScheme.outlineVariant.withValues(alpha: 0.4)),
+          width: (isMax || isMin) ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Cell $cellNumber',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              Text(
+                isConnected ? '${voltage.toStringAsFixed(3)} V' : '-- V',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: colorScheme.onSurface,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 6,
+              backgroundColor: colorScheme.surfaceContainerHighest,
+              valueColor: AlwaysStoppedAnimation<Color>(barColor),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // TAB 3: CONTROLS & PROTECTION (MOSFET Switches, Protection Alarms)
+  // ===========================================================================
+
+  Widget _buildControlsAndProtectionTab(BuildContext context, BatteryData data) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isConnected = data.isConnected;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'MOSFET Switch Controls',
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Charge Switch
+          _SafetyToggleButton(
+            title: 'CHARGE MOSFET',
+            subtitle: !isConnected
+                ? 'Not connected'
+                : (data.chargingEnabled ? 'ACTIVE • ON (Allows incoming current)' : 'DISABLED • OFF (Charge blocked)'),
+            isActive: data.chargingEnabled && isConnected,
+            isDisabled: !isConnected,
+            activeIcon: Icons.bolt_rounded,
+            inactiveIcon: Icons.power_off_rounded,
+            activeColor: Colors.teal.shade600,
+            onTap: isConnected ? () => _handleChargeToggle(context, data.chargingEnabled) : null,
+          ),
+
+          const SizedBox(height: 12),
+
+          // Discharge Switch
+          _SafetyToggleButton(
+            title: 'DISCHARGE MOSFET',
+            subtitle: !isConnected
+                ? 'Not connected'
+                : (data.dischargingEnabled ? 'ACTIVE • ON (Power output energized)' : 'DISABLED • OFF (Load power cut)'),
+            isActive: data.dischargingEnabled && isConnected,
+            isDisabled: !isConnected,
+            activeIcon: Icons.power_rounded,
+            inactiveIcon: Icons.block_rounded,
+            activeColor: colorScheme.primary,
+            onTap: isConnected ? () => _handleDischargeToggle(context, data.dischargingEnabled) : null,
+          ),
+
+          const SizedBox(height: 12),
+
+          // Auto-Balance Switch
+          SwitchListTile.adaptive(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.4)),
+            ),
+            tileColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.25),
+            secondary: Icon(
+              Icons.balance_rounded,
+              color: data.balanceEnabled && isConnected ? Colors.teal.shade600 : colorScheme.onSurfaceVariant,
+            ),
+            title: Text(
+              'Auto-Balance Cells',
+              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            subtitle: Text(
+              'Equalize cell voltages during charge/idle',
+              style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+            ),
+            value: data.balanceEnabled && isConnected,
+            onChanged: isConnected ? (v) => _controller.setBalanceEnabled(v) : null,
+          ),
+
+          const SizedBox(height: 24),
+
+          // Hardware Safety Protection Status
+          Text(
+            'Hardware Protection Alarms',
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          _buildProtectionItem('Cell Over-Voltage Protection (OVP)', data.protection.overVoltage),
+          _buildProtectionItem('Cell Under-Voltage Protection (UVP)', data.protection.underVoltage),
+          _buildProtectionItem('Charge Over-Current Protection (OCCP)', data.protection.chargeOverCurrent),
+          _buildProtectionItem('Discharge Over-Current Protection (OCDP)', data.protection.dischargeOverCurrent),
+          _buildProtectionItem('High Temperature Protection (OTP)', data.protection.overTemperature),
+          _buildProtectionItem('Low Temperature Protection (UTP)', data.protection.lowTemperature),
+          _buildProtectionItem('Short Circuit Protection (SCP)', data.protection.shortCircuit),
+
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProtectionItem(String label, bool isFault) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: isFault
+            ? colorScheme.errorContainer.withValues(alpha: 0.3)
+            : colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isFault
+              ? colorScheme.error.withValues(alpha: 0.6)
+              : colorScheme.outlineVariant.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: isFault ? colorScheme.error : Colors.teal.shade700,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              isFault ? 'TRIGGERED' : 'NORMAL',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 9.5,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // TAB 4: DEVICES TAB (BLE Scanner & Multi-Battery Manager)
+  // ===========================================================================
+
+  Widget _buildDevicesTab(BuildContext context, BatteryData data) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final activeId = data.isConnected ? data.device?.id : null;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Bluetooth LE Scanner',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    'Multi-battery BMS fleet discovery',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _controller.isScanning ? null : () => _controller.scanDevices(),
+                icon: _controller.isScanning
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.radar_rounded, size: 18),
+                label: Text(_controller.isScanning ? 'Scanning...' : 'Scan BLE'),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          ..._controller.availableDevices.map((dev) {
+            final isCurrent = dev.id == activeId;
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Material(
+                color: isCurrent
+                    ? colorScheme.primaryContainer.withValues(alpha: 0.35)
+                    : colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(
+                    color: isCurrent
+                        ? colorScheme.primary
+                        : colorScheme.outlineVariant.withValues(alpha: 0.5),
+                    width: isCurrent ? 2 : 1,
+                  ),
+                ),
+                child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  leading: CircleAvatar(
+                    backgroundColor: isCurrent ? colorScheme.primary : colorScheme.surfaceContainerHighest,
+                    foregroundColor: isCurrent ? colorScheme.onPrimary : colorScheme.onSurfaceVariant,
+                    child: Icon(
+                      isCurrent ? Icons.bluetooth_connected_rounded : Icons.bluetooth_rounded,
+                    ),
+                  ),
+                  title: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          dev.name,
+                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      if (isCurrent)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: colorScheme.primary,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            'CONNECTED',
+                            style: TextStyle(
+                              color: colorScheme.onPrimary,
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 4),
+                      Text(
+                        '${dev.model} • MAC: ${dev.id}',
+                        style: theme.textTheme.bodySmall?.copyWith(fontSize: 11),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${dev.socPercent.toInt()}% SOC • ${dev.voltage.toStringAsFixed(1)}V • Signal: ${dev.rssi} dBm (${dev.signalStrength})',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          fontSize: 11,
+                          color: isCurrent ? colorScheme.primary : colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  trailing: isCurrent
+                      ? IconButton(
+                          icon: const Icon(Icons.link_off_rounded),
+                          tooltip: 'Disconnect',
+                          onPressed: () => _controller.disconnectCurrentDevice(),
+                        )
+                      : FilledButton(
+                          style: FilledButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          onPressed: () => _controller.selectDevice(dev),
+                          child: const Text('Connect'),
+                        ),
+                ),
+              ),
+            );
+          }),
+
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
 }
 
 // ============================================================================
 // CUSTOM WIDGET: _SafetyToggleButton
 // ============================================================================
 
-/// Large, high-visibility safety button representing physical MOSFET gates.
-///
-/// Features:
-/// - Minimum height: 68dp (exceeds 56dp requirement).
-/// - Multi-sensory states: color + distinct icon + explicit status label + fill style.
-/// - Outlined/muted style when OFF, filled/solid style when ON.
-/// - Low-opacity and disabled pointer events when disconnected.
 class _SafetyToggleButton extends StatelessWidget {
   final String title;
   final String subtitle;
@@ -1195,7 +1908,6 @@ class _SafetyToggleButton extends StatelessWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    // Disabled / Disconnected state
     if (isDisabled) {
       return Container(
         constraints: const BoxConstraints(minHeight: 68),
@@ -1248,7 +1960,6 @@ class _SafetyToggleButton extends StatelessWidget {
       );
     }
 
-    // Active (ON) vs Inactive (OFF) styling
     final backgroundColor = isActive
         ? activeColor
         : colorScheme.surfaceContainerHighest.withValues(alpha: 0.2);
@@ -1342,9 +2053,8 @@ class _SafetyToggleButton extends StatelessWidget {
 // PAINTER: _BatteryProgressRingPainter
 // ============================================================================
 
-/// Custom painter rendering the circular battery percentage progress ring.
 class _BatteryProgressRingPainter extends CustomPainter {
-  final double progress; // 0.0 to 1.0
+  final double progress;
   final Color trackColor;
   final Color progressColor;
   final double strokeWidth;
@@ -1361,7 +2071,6 @@ class _BatteryProgressRingPainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = (math.min(size.width, size.height) - strokeWidth) / 2;
 
-    // Background track ring
     final trackPaint = Paint()
       ..color = trackColor
       ..style = PaintingStyle.stroke
@@ -1372,7 +2081,6 @@ class _BatteryProgressRingPainter extends CustomPainter {
 
     if (progress <= 0) return;
 
-    // Active progress arc starting from top (-pi / 2)
     final progressPaint = Paint()
       ..color = progressColor
       ..style = PaintingStyle.stroke
